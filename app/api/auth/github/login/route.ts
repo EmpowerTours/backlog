@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizeUrl, GITHUB_CLIENT_ID } from "@/lib/github";
+import { publicOrigin } from "@/lib/origin";
 
 export async function GET(req: NextRequest) {
   if (!GITHUB_CLIENT_ID) {
@@ -8,7 +9,7 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
-  const origin = new URL(req.url).origin;
+  const origin = publicOrigin(req);
   const redirectUri = `${origin}/api/auth/github/callback`;
   const state = crypto.randomUUID();
 
