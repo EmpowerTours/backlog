@@ -115,20 +115,35 @@ function daysAgo(iso: string | null): number | null {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
 }
 
-/** Score repos with GitHub Models on the user's own token. Falls back to a heuristic. */
+/**
+ * Score repos with GitHub Models. Tries the user's OWN token first so every user
+ * spends their own free Models quota (scales per-user); falls back to a shared
+ * server token (GITHUB_MODELS_TOKEN) only if the user's token can't reach Models;
+ * finally falls back to a free heuristic so scoring never hard-fails.
+ *
+ * NOTE on true multi-user scale: a classic OAuth "sign in" token usually can't call
+ * GitHub Models (models:read isn't a classic OAuth scope). To make per-user scoring
+ * work for everyone without a shared token, convert this login from an OAuth App to a
+ * GitHub App — a GitHub App's user-to-server tokens can carry the `models:read`
+ * permission, so each user scores on their own quota. That's the scale path.
+ */
 export async function scoreRepos(
   token: string,
   repos: GhRepo[],
 ): Promise<Scored[]> {
-  try {
-    return await scoreWithModels(token, repos);
-  } catch (e) {
-    console.warn(
-      "GitHub Models scoring failed, using heuristic:",
-      (e as Error).message,
-    );
-    return repos.map(heuristicScore);
+  const serverToken = process.env.GITHUB_MODELS_TOKEN;
+  const candidates = [
+    ...new Set([token, serverToken].filter(Boolean)),
+  ] as string[];
+  for (const t of candidates) {
+    try {
+      return await scoreWithModels(t, repos);
+    } catch (e) {
+      console.warn("Models scoring attempt failed:", (e as Error).message);
+    }
   }
+  console.warn("All Models attempts failed — using heuristic.");
+  return repos.map(heuristicScore);
 }
 
 async function scoreWithModels(
@@ -149,13 +164,10 @@ async function scoreWithModels(
     "Heuristics: 'done' if mature and stable; 'polishing' if ~80-99%; 'active' if pushed recently; " +
     "'abandoned' if untouched 45+ days and not clearly finished, or archived. Be specific in notes.";
 
-  // Prefer a server token with Models access (classic OAuth ignores models:read);
-  // fall back to the user's own token in case it was granted.
-  const modelsToken = process.env.GITHUB_MODELS_TOKEN || token;
   const res = await fetch(GH_MODELS, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${modelsToken}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
