@@ -51,4 +51,10 @@ Set `NEXT_PUBLIC_BACKLOG_ADDRESS` (see `env.sample`) so the app knows which cont
 
 ## Stack
 
-Foundry (Solidity 0.8.20) · Next.js + wagmi/viem · a plain Node CLI · the Claude API for scoring. Deployed on Railway.
+Foundry (Solidity 0.8.20) · Next.js + wagmi/viem · a plain Node CLI · GitHub Models (or Claude) for scoring. Deployed on Railway.
+
+## Scoring & scale
+
+Reading a portfolio is free and needs no wallet. Writing costs a little Monad gas, and the sync only writes the projects whose score actually changed — most days that's nothing.
+
+Scoring runs on **GitHub Models** (free tier). The hosted app tries each visitor's own GitHub token first, then falls back to a shared server token (`GITHUB_MODELS_TOKEN`), then to a no-AI heuristic — so it never hard-fails and visitors paste nothing. For true per-user scale (everyone on their own free quota), convert the login from an OAuth App to a **GitHub App**, whose user-to-server tokens can carry `models:read`. The CLI path uses your local `ANTHROPIC_API_KEY` if present, otherwise the heuristic.
