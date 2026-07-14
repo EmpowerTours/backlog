@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/* ---------- Backlog: the honest ledger of everything you've built ---------- */
+@theme {
+  --color-ink: #0e0f12;
+  --color-ink-2: #131519;
+  --color-panel: #16181d;
+  --color-panel-2: #1b1e24;
+  --color-edge: #262a31;
+  --color-edge-bright: #333842;
+
+  --color-text: #e7e7e4;
+  --color-dim: #8a8f98;
+  --color-faint: #565b64;
+
+  /* lifecycle */
+  --color-active: #e0a34e; /* being worked on */
+  --color-polishing: #5b9bd5; /* essentially done */
+  --color-done: #4fb477; /* shipped */
+  --color-abandoned: #6b6b72; /* dead */
+
+  --color-accent: #4fb477;
+
+  --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-space-mono), ui-monospace, monospace;
+
+  --radius-panel: 12px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  background: var(--color-ink);
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+}
+
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-edge);
+  border-radius: var(--radius-panel);
+}
+
+/* completion bar — a ledger tick, filled to percent */
+.bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-edge);
+  overflow: hidden;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* faint ruled grid, like accounting paper, behind the whole board */
+.ledger-lines {
+  background-image: linear-gradient(var(--color-edge) 1px, transparent 1px);
+  background-size: 100% 40px;
+  opacity: 0.25;
+}
+
+/* dead projects: dimmed + struck, owned rather than hidden */
+.tomb {
+  opacity: 0.55;
+}
+.tomb .proj-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--color-faint);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: rgba(79, 180, 119, 0.25);
+}
