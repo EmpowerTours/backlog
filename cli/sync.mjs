@@ -5,7 +5,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createWalletClient, http, defineChain } from "viem";
+import {
+  createWalletClient,
+  createPublicClient,
+  http,
+  defineChain,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildDigests } from "./scan.mjs";
 
@@ -190,21 +195,53 @@ async function writeOnchain(scored) {
     chain: monad,
     transport: http(CFG.rpc),
   });
+  const publicClient = createPublicClient({
+    chain: monad,
+    transport: http(CFG.rpc),
+  });
 
-  const slugs = scored.map((s) => s.slug);
-  const names = scored.map((s) => s.name);
-  const percents = scored.map((s) => s.percent);
-  const statuses = scored.map((s) => STATUS[s.status]);
-  const notes = scored.map((s) => s.note);
+  // Read what's already onchain and only write projects that actually changed —
+  // no point paying gas to restore an identical value.
+  const onchain = await publicClient.readContract({
+    address: CFG.address,
+    abi,
+    functionName: "getProjects",
+    args: [account.address],
+  });
+  const bySlug = new Map(onchain.map((p) => [p.slug, p]));
+
+  const changed = scored.filter((s) => {
+    const cur = bySlug.get(s.slug);
+    if (!cur) return true; // new project
+    return (
+      Number(cur.percent) !== s.percent ||
+      Number(cur.status) !== STATUS[s.status] ||
+      cur.name !== s.name ||
+      cur.note !== s.note
+    );
+  });
+
+  if (changed.length === 0) {
+    console.log(
+      `\n✓ Onchain portfolio already current — nothing changed, no gas spent.`,
+    );
+    return;
+  }
 
   console.log(
-    `\n▶ writing ${scored.length} projects onchain as ${account.address}…`,
+    `\n▶ ${changed.length} of ${scored.length} projects changed — writing onchain as ${account.address}…`,
   );
   const hash = await wallet.writeContract({
     address: CFG.address,
     abi,
     functionName: "batchUpsert",
-    args: [slugs, names, percents, statuses, notes],
+    args: [
+      changed.map((s) => s.slug),
+      changed.map((s) => s.name),
+      changed.map((s) => s.percent),
+      changed.map((s) => STATUS[s.status]),
+      changed.map((s) => s.note),
+    ],
   });
   console.log(`✓ tx ${hash}`);
   console.log(`  https://monadscan.com/tx/${hash}`);
