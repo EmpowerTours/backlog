@@ -14,7 +14,7 @@
 
 **Project URL:** _<Railway URL — fill after deploy>_
 
-**GitHub repo:** _<public repo URL — fill after push>_
+**GitHub repo:** https://github.com/EmpowerTours/backlog
 
 **Demo video:** _<upload + fill>_
 
