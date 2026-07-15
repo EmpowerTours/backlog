@@ -12,7 +12,15 @@ export function Header() {
           / onchain build ledger
         </span>
       </Link>
-      <Connect />
+      <div className="flex items-center gap-4">
+        <Link
+          href="/claims"
+          className="text-sm font-semibold text-dim transition hover:text-accent"
+        >
+          bonds
+        </Link>
+        <Connect />
+      </div>
     </header>
   );
 }
