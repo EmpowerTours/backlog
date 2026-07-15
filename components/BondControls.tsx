@@ -77,6 +77,19 @@ export function BondControls({
       value: MIN_BOND,
     });
   }
+  async function openStake() {
+    setShowUrl(true);
+    // pre-fill the deployment URL GitHub has on record so the user just confirms
+    try {
+      const r = await fetch(
+        `/api/github/homepage?slug=${encodeURIComponent(slug)}`,
+      );
+      const d = await r.json();
+      if (r.ok && d.homepage) setUrl(d.homepage);
+    } catch {
+      /* leave the field blank */
+    }
+  }
   function challenge() {
     tx.send({
       ...backlog,
@@ -179,7 +192,7 @@ export function BondControls({
   if (!showUrl) {
     return (
       <button
-        onClick={() => setShowUrl(true)}
+        onClick={openStake}
         className="rounded border border-edge px-2 py-1 text-xs text-dim transition hover:border-done hover:text-done"
         title="Put 0.1 MON behind this being live. Anyone can challenge; if it's dead you lose the bond."
       >
@@ -188,26 +201,32 @@ export function BondControls({
     );
   }
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <input
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        placeholder="https://your-live-url"
-        className="w-44 rounded border border-edge bg-ink-2 px-2 py-1 font-mono text-text outline-none focus:border-accent"
-      />
-      <button
-        onClick={stake}
-        disabled={busy || !/^https?:\/\//i.test(url)}
-        className="rounded bg-done px-2 py-1 font-semibold text-ink transition hover:brightness-110 disabled:opacity-40"
-      >
-        {tx.isBusy ? "…" : "bond 0.1"}
-      </button>
-      <button
-        onClick={() => setShowUrl(false)}
-        className="text-faint hover:text-text"
-      >
-        ✕
-      </button>
+    <div className="flex flex-col items-end gap-1 text-xs">
+      <div className="flex items-center gap-2">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://your-live-url"
+          className="w-52 rounded border border-edge bg-ink-2 px-2 py-1 font-mono text-text outline-none focus:border-accent"
+        />
+        <button
+          onClick={stake}
+          disabled={busy || !/^https?:\/\//i.test(url)}
+          className="rounded bg-done px-2 py-1 font-semibold text-ink transition hover:brightness-110 disabled:opacity-40"
+        >
+          {tx.isBusy ? "…" : "bond 0.1"}
+        </button>
+        <button
+          onClick={() => setShowUrl(false)}
+          className="text-faint hover:text-text"
+        >
+          ✕
+        </button>
+      </div>
+      <span className="text-right text-faint">
+        The live URL you&apos;re bonding. Anyone can challenge it — if it&apos;s
+        dead 3+ days after a challenge, you lose the 0.1 MON.
+      </span>
     </div>
   );
 }
