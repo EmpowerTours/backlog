@@ -67,11 +67,7 @@ export function Portfolio({
           <>
             Use the <span className="text-text">Connect GitHub</span> card above
             to score your repos and write your portfolio onchain with this
-            wallet — nothing to install. Or run the local CLI, which also reads
-            your Claude Code sessions:
-            <pre className="mt-3 overflow-x-auto rounded-lg border border-edge bg-ink-2 p-3 font-mono text-sm text-text">
-              node cli/sync.mjs
-            </pre>
+            wallet — nothing to install, nothing to paste.
           </>
         ) : (
           <>This builder hasn&apos;t synced a portfolio yet.</>

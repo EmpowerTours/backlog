@@ -44,9 +44,8 @@ function Hero() {
         quietly died.
       </p>
       <p className="mt-4 max-w-xl text-sm text-faint">
-        Power move: the <code className="text-dim">backlog sync</code> CLI also
-        reads your local Claude Code sessions to score work that never hit a
-        commit.
+        No manual entry, ever. It reads the truth that already exists in your
+        repos — and buries the dead ones instead of hiding them.
       </p>
     </div>
   );

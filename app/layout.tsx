@@ -18,11 +18,11 @@ const spaceMono = Space_Mono({
 export const metadata: Metadata = {
   title: "Backlog — the honest ledger of everything you've built",
   description:
-    "Every project you've started, scored by AI from your git history and Claude Code sessions, and written onchain to Monad. What's done, what's left, what's dead.",
+    "Connect GitHub and an AI scores how done each of your repos really is, then anchors your portfolio onchain to Monad. What's shipped, what's left, what's dead.",
   openGraph: {
     title: "Backlog — every project you've started, proven onchain",
     description:
-      "An AI reads your repos and AI-coding sessions, scores each project's completion, and anchors your builder track record onchain to Monad.",
+      "An AI reads your GitHub repos, scores each project's completion, and anchors your builder track record onchain to Monad.",
     type: "website",
   },
 };
