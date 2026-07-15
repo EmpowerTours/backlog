@@ -75,6 +75,9 @@ export function BondControls({
       functionName: "bond",
       args: [slug, url.slice(0, 200)],
       value: MIN_BOND,
+      // Monad's eth_estimateGas reserves the block gas limit × price against balance, so a
+      // value-bearing tx wrongly reads as "likely to fail". An explicit limit skips estimateGas.
+      gas: BigInt(300000),
     });
   }
   async function openStake() {
@@ -96,10 +99,16 @@ export function BondControls({
       functionName: "challenge",
       args: [builder, slug],
       value: amount,
+      gas: BigInt(250000),
     });
   }
   function withdraw() {
-    tx.send({ ...backlog, functionName: "withdrawBond", args: [slug] });
+    tx.send({
+      ...backlog,
+      functionName: "withdrawBond",
+      args: [slug],
+      gas: BigInt(150000),
+    });
   }
   async function resolve() {
     setResolving(true);
@@ -121,6 +130,7 @@ export function BondControls({
             BigInt(d.observedAt),
             d.signature as `0x${string}`,
           ],
+          gas: BigInt(350000),
         });
       }
     } catch {
