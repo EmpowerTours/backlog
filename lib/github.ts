@@ -21,8 +21,6 @@ export interface Scored {
   note: string;
 }
 
-const STATUS_SET = new Set(["active", "polishing", "done", "abandoned"]);
-
 export function authorizeUrl(redirectUri: string, state: string): string {
   const u = new URL(GH_AUTHORIZE);
   u.searchParams.set("client_id", GITHUB_CLIENT_ID);
@@ -86,12 +84,14 @@ export interface GhRepo {
   archived: boolean;
   openIssues: number;
   url: string;
+  homepage: string | null;
   // filled by enrichRepos — real content signals
   files?: number;
   codeFiles?: number;
   hasTests?: boolean;
   hasReadme?: boolean;
   hasManifest?: boolean;
+  isLive?: boolean; // homepage URL responds (deployed = shipped signal)
 }
 
 export async function fetchRepos(token: string): Promise<GhRepo[]> {
@@ -117,7 +117,23 @@ export async function fetchRepos(token: string): Promise<GhRepo[]> {
       archived: Boolean(r.archived),
       openIssues: Number(r.open_issues_count ?? 0),
       url: String(r.html_url ?? ""),
+      homepage: (r.homepage as string) || null,
     }));
+}
+
+/** Ping a repo's homepage; a 2xx/3xx means it's deployed and serving = a real "shipped" signal. */
+async function checkLive(homepage: string | null): Promise<boolean> {
+  if (!homepage || !/^https?:\/\//i.test(homepage)) return false;
+  try {
+    const res = await fetch(homepage, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.status < 400;
+  } catch {
+    return false;
+  }
 }
 
 const NON_CODE =
@@ -144,39 +160,63 @@ export async function enrichRepos(
 }
 
 async function enrichOne(token: string, repo: GhRepo): Promise<GhRepo> {
-  try {
-    const res = await fetch(
+  // tree read + liveness ping in parallel
+  const [tree, isLive] = await Promise.all([
+    fetch(
       `${GH_API}/repos/${repo.fullName}/git/trees/${repo.defaultBranch}?recursive=1`,
-      { headers: ghHeaders(token), signal: AbortSignal.timeout(8000) },
-    );
-    if (!res.ok) {
-      // 409 = empty repo (no commits)
-      return {
-        ...repo,
-        files: 0,
-        codeFiles: 0,
-        hasTests: false,
-        hasReadme: false,
-        hasManifest: false,
-      };
-    }
-    const data = (await res.json()) as {
-      tree?: Array<{ path: string; type: string }>;
-    };
-    const blobs = (data.tree ?? []).filter((t) => t.type === "blob");
-    const paths = blobs.map((b) => b.path);
-    const codeFiles = paths.filter((p) => !NON_CODE.test(p)).length;
+      {
+        headers: ghHeaders(token),
+        signal: AbortSignal.timeout(8000),
+      },
+    )
+      .then(async (res) =>
+        res.ok
+          ? ((await res.json()) as {
+              tree?: Array<{ path: string; type: string }>;
+            })
+          : null,
+      )
+      .catch(() => null),
+    checkLive(repo.homepage),
+  ]);
+
+  if (!tree) {
+    // 409 (empty repo) or fetch failed
     return {
       ...repo,
-      files: blobs.length,
-      codeFiles,
-      hasTests: paths.some((p) => TEST_RE.test(p) || TEST_FILE.test(p)),
-      hasReadme: paths.some((p) => README_RE.test(p)),
-      hasManifest: paths.some((p) => MANIFEST.test(p)),
+      files: 0,
+      codeFiles: 0,
+      hasTests: false,
+      hasReadme: false,
+      hasManifest: false,
+      isLive,
     };
-  } catch {
-    return repo; // leave signals undefined; scorer treats as unknown
   }
+  const blobs = (tree.tree ?? []).filter((t) => t.type === "blob");
+  const paths = blobs.map((b) => b.path);
+  const codeFiles = paths.filter((p) => !NON_CODE.test(p)).length;
+  return {
+    ...repo,
+    files: blobs.length,
+    codeFiles,
+    hasTests: paths.some((p) => TEST_RE.test(p) || TEST_FILE.test(p)),
+    hasReadme: paths.some((p) => README_RE.test(p)),
+    hasManifest: paths.some((p) => MANIFEST.test(p)),
+    isLive,
+  };
+}
+
+/** Deterministic status from completion + recency + liveness, so status never contradicts percent. */
+function deriveStatus(r: GhRepo, percent: number): Scored["status"] {
+  if (r.archived) return "abandoned";
+  if (r.codeFiles !== undefined && r.codeFiles < 2) return "abandoned"; // effectively empty
+  if (r.isLive) return "done"; // deployed and responding = shipped
+  const pushed = daysAgo(r.pushedAt);
+  const stale = pushed != null && pushed > 45;
+  if (stale) return percent >= 90 ? "done" : "abandoned"; // finished-then-left vs given-up
+  if (percent >= 85) return "done";
+  if (percent >= 60) return "polishing";
+  return "active";
 }
 
 function daysAgo(iso: string | null): number | null {
@@ -224,19 +264,19 @@ async function scoreWithModels(
   const lines = repos
     .map(
       (r) =>
-        `- ${r.name} [${r.language ?? "?"}] pushed=${daysAgo(r.pushedAt) ?? "?"}d ago age=${daysAgo(r.createdAt) ?? "?"}d files=${r.files ?? "?"} code=${r.codeFiles ?? "?"} tests=${r.hasTests ? "y" : "n"} manifest=${r.hasManifest ? "y" : "n"} issues=${r.openIssues}${r.archived ? " ARCHIVED" : ""} desc:"${(r.description ?? "").slice(0, 80)}"`,
+        `- ${r.name} [${r.language ?? "?"}] pushed=${daysAgo(r.pushedAt) ?? "?"}d ago files=${r.files ?? "?"} code=${r.codeFiles ?? "?"} tests=${r.hasTests ? "y" : "n"} manifest=${r.hasManifest ? "y" : "n"} live=${r.isLive ? "y" : "n"}${r.archived ? " ARCHIVED" : ""} desc:"${(r.description ?? "").slice(0, 80)}"`,
     )
     .join("\n");
 
   const system =
-    "You assess software project completion for a builder's portfolio from GitHub repo signals. " +
+    "You estimate how COMPLETE each software project is (0-100), from GitHub signals. " +
     "Return a STRICT JSON array, one object per repo, no prose, no code fences. " +
-    'Each: {"slug":string,"name":string(<=80),"percent":0-100 int,"status":"active"|"polishing"|"done"|"abandoned","note":string(<=150)}. ' +
-    "WEIGHT ACTUAL CONTENT HEAVILY: `code` = real source files (excludes README/license/lockfiles). " +
-    "code=0 -> empty stub, percent 0-5, 'abandoned' regardless of age. code 1-2 -> barely started, <=20. " +
-    "A repo is only 'done'/'polishing' with substantial code AND signs of completeness (tests, manifest, mature history). " +
-    "'active' if pushed recently; 'abandoned' if untouched 45+ days and not clearly finished, or archived. " +
-    "Do NOT rate a tiny repo as done just because it's old and stable. Be specific in notes (mention what's actually there).";
+    'Each: {"slug":string,"name":string(<=80),"percent":0-100 int,"note":string(<=150)}. ' +
+    "Only output percent + a specific note. (Status is computed separately from percent, recency, and liveness — do not output it.) " +
+    "CALIBRATE percent by real content — `code` = source files (excludes README/license/lockfiles): " +
+    "code=0 -> 0-5. code 1-2 (bare scaffold/template/one-file) -> 8-20. code 3-8 (early prototype) -> 25-45. " +
+    "code 9-25 with a manifest -> 45-70. substantial code + tests + manifest -> 70-90. only reserve 90-100 for clearly complete, polished, well-tested projects (or live=y). " +
+    "Be STRICT: 'basic implementation, lacks tests' is ~40-55, NOT 80. A template or bones repo is ~15. Notes must name what's actually there.";
 
   const res = await fetch(GH_MODELS, {
     method: "POST",
@@ -274,8 +314,8 @@ async function scoreWithModels(
 function heuristicScore(r: GhRepo): Scored {
   const pushed = daysAgo(r.pushedAt);
   const code = r.codeFiles;
-  let status: Scored["status"] = "active";
-  let percent =
+  // percent only — normalize() derives status from it
+  const percent =
     code !== undefined
       ? Math.max(
           5,
@@ -285,13 +325,9 @@ function heuristicScore(r: GhRepo): Scored {
           ),
         )
       : Math.max(10, Math.min(85, Math.round(Math.log2(r.size + 2) * 12)));
-  if (r.archived || (pushed != null && pushed > 60)) {
-    status = "abandoned";
-  } else if (percent >= 80) status = "polishing";
   return normalize(r, {
     name: r.name,
     percent,
-    status,
     note:
       r.description ??
       `${code ?? "?"} code files${r.hasTests ? " + tests" : ""}, last push ${pushed ?? "?"}d ago`,
@@ -299,27 +335,26 @@ function heuristicScore(r: GhRepo): Scored {
 }
 
 function normalize(r: GhRepo, s: Partial<Scored>): Scored {
-  let status = (
-    s.status && STATUS_SET.has(s.status) ? s.status : "active"
-  ) as Scored["status"];
   let percent = Math.max(0, Math.min(100, Math.round(Number(s.percent) || 0)));
   let note = String(s.note || "").slice(0, 150);
 
-  // Hard content guards — a repo with little/no real code can't score as finished,
-  // no matter what the model says. `codeFiles` is undefined only if enrichment failed.
+  // Hard content guards on the PERCENT — a repo with little/no real code can't be high,
+  // no matter what the model says. codeFiles is undefined only if enrichment failed.
   const code = r.codeFiles;
   if (code !== undefined) {
     if (code === 0) {
       percent = Math.min(percent, 3);
-      status = "abandoned";
       if (!note) note = "empty — no code files";
     } else if (code < 3) {
       percent = Math.min(percent, 20);
-      if (status === "done" || status === "polishing") status = "active";
-    } else if (code < 8 && (status === "done" || status === "polishing")) {
-      percent = Math.min(percent, 60); // only a handful of files — not "done"
+    } else if (code < 8) {
+      percent = Math.min(percent, 60);
     }
   }
+  if (r.isLive) percent = Math.max(percent, 85); // it's deployed and serving
+
+  // Status is DERIVED from percent + recency + liveness, so it never contradicts the bar.
+  const status = deriveStatus(r, percent);
 
   return {
     slug: r.name.slice(0, 60),
