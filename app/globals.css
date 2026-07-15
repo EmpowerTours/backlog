@@ -70,13 +70,12 @@ body {
   opacity: 0.25;
 }
 
-/* dead projects: dimmed + struck, owned rather than hidden */
-.tomb {
-  opacity: 0.55;
-}
+/* dead projects: struck + muted name, but the completion bar stays solid so a
+   high-percent dead repo reads as "was almost done, then abandoned" — not blank/broken */
 .tomb .proj-name {
   text-decoration: line-through;
   text-decoration-color: var(--color-faint);
+  color: var(--color-dim);
 }
 
 *:focus-visible {
