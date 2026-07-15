@@ -8,6 +8,7 @@ import { useTx } from "@/lib/useTx";
 import { shortAddr } from "@/lib/format";
 import { Vitals } from "./Vitals";
 import { ProjectRow } from "./ProjectRow";
+import { BadgeCard } from "./BadgeCard";
 
 export function Portfolio({
   address,
@@ -119,6 +120,8 @@ export function Portfolio({
             : "Couldn't remove that one."}
         </p>
       )}
+
+      {owner && <BadgeCard address={address} />}
     </div>
   );
 }
