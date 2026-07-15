@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchViewer, fetchRepos, scoreRepos } from "@/lib/github";
+import { setCached } from "@/lib/scoreCache";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -15,6 +16,7 @@ export async function GET(req: NextRequest) {
       fetchRepos(token),
     ]);
     const projects = await scoreRepos(token, repos);
+    setCached(viewer.login, projects); // so /attest signs the same scores without re-scoring
     return NextResponse.json({
       login: viewer.login,
       name: viewer.name,

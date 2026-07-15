@@ -17,13 +17,14 @@ interface Proposed {
 const STATUS_NUM = { active: 0, polishing: 1, done: 2, abandoned: 3 } as const;
 
 export function GithubSync({ onWritten }: { onWritten: () => void }) {
-  const { isConnected } = useAccount();
+  const { address, isConnected } = useAccount();
   const [state, setState] = useState<
     "loading" | "disconnected" | "ready" | "error"
   >("loading");
   const [login, setLogin] = useState<string | null>(null);
   const [projects, setProjects] = useState<Proposed[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [attesting, setAttesting] = useState(false);
   const tx = useTx();
 
   useEffect(() => {
@@ -50,19 +51,40 @@ export function GithubSync({ onWritten }: { onWritten: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tx.isConfirmed]);
 
-  function writeOnchain() {
-    const capped = projects.slice(0, 60); // keep one tx sane
-    tx.send({
-      ...backlog,
-      functionName: "batchUpsert",
-      args: [
-        capped.map((p) => p.slug.slice(0, 60)),
-        capped.map((p) => p.name.slice(0, 80)),
-        capped.map((p) => p.percent),
-        capped.map((p) => STATUS_NUM[p.status]),
-        capped.map((p) => p.note.slice(0, 150)),
-      ],
-    });
+  async function writeOnchain() {
+    if (!address) return;
+    setErr(null);
+    setAttesting(true);
+    try {
+      // the scorer signs your server-computed scores; the contract rejects anything unsigned
+      const r = await fetch("/api/github/attest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ owner: address }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        setErr(d.error || "Couldn't get a scorer attestation.");
+        return;
+      }
+      tx.send({
+        ...backlog,
+        functionName: "batchUpsert",
+        args: [
+          d.slugs,
+          d.names,
+          d.percents,
+          d.statuses,
+          d.notes,
+          BigInt(d.deadline),
+          d.signature as `0x${string}`,
+        ],
+      });
+    } catch {
+      setErr("Couldn't reach the scorer to sign your portfolio.");
+    } finally {
+      setAttesting(false);
+    }
   }
 
   if (state === "loading") {
@@ -132,14 +154,16 @@ export function GithubSync({ onWritten }: { onWritten: () => void }) {
         {isConnected ? (
           <button
             onClick={writeOnchain}
-            disabled={tx.isBusy || shown.length === 0}
+            disabled={tx.isBusy || attesting || shown.length === 0}
             className="rounded-lg bg-accent px-4 py-2.5 font-display font-bold text-ink transition hover:brightness-110 disabled:opacity-50"
           >
-            {tx.isPending
-              ? "Confirm in wallet…"
-              : tx.isConfirming
-                ? "Writing…"
-                : `Write ${shown.length} onchain`}
+            {attesting
+              ? "Signing scores…"
+              : tx.isPending
+                ? "Confirm in wallet…"
+                : tx.isConfirming
+                  ? "Writing…"
+                  : `Write ${shown.length} onchain`}
           </button>
         ) : (
           <Connect />

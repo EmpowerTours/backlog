@@ -10,7 +10,7 @@
 
 **Category:** Mainnet
 
-**Contract address:** `0x6F432296262feFa84DcFF4b520071616b33794fb` (Monad mainnet, chainid 143, verified on MonadScan)
+**Contract address:** `0x37284f74Ce61378522CFC39fDE4FF9d40A195bb8` (Monad mainnet, chainid 143, verified on MonadScan)
 
 **Project URL:** https://backlog-production-d1b6.up.railway.app
 

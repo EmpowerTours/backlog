@@ -10,24 +10,26 @@ The chain is the point: it's a public, self-updating record of your building tha
 
 ## How it works
 
-1. **Connect GitHub.** Backlog fetches your repos, reads each one's file tree (code files, tests, manifest) and pings its deployment, then hands the digest to an AI that returns `{percent, note}` per project. Lifecycle (active / polishing / done / abandoned) is derived deterministically from the score, recency, and whether the repo is actually live — so a 100% project is never labeled "active" and a live app is never called dead.
-2. **Sign one transaction.** The whole portfolio is written to the **Backlog** contract on Monad in a single `batchUpsert`. You sign with your own wallet — it's your portfolio, under your address.
-3. **Read it from the chain.** The web app reads your portfolio straight from Monad: completion bars, lifecycle, and a one-click "bury" for dead projects. Every builder's portfolio has a public URL at `/b/<address>` and a live badge at `/badge/<address>`.
+1. **Connect GitHub.** Backlog fetches your repos, reads each one's file tree (code files, tests, manifest), its own roadmap/checklist, and pings its deployment, then hands the digest to an AI that returns `{percent, note}` per project. Lifecycle (active / polishing / done / abandoned) is derived deterministically from the score, recency, and whether the repo is actually live.
+2. **The scorer signs your scores.** The contract only accepts a `batchUpsert` that carries a fresh signature from the off-chain scorer — so a portfolio *cannot* contain numbers you hand-typed. You still sign the transaction with your own wallet; the scorer signs the *scores*. Credibly-sourced, not just self-reported.
+3. **Put money on it (optional).** For a shipped project you can post a **shipping bond** in MON, committing the live URL onchain. Anyone can challenge it; after a 3-day cure window an oracle-signed liveness check settles it. If the deployment is dead, the challenger takes the pot and the project drops to the graveyard — a permissionless market for catching abandoned "done" claims.
+4. **Read it from the chain.** Completion bars, lifecycle, bond state, and a one-click "bury" for dead projects. Every builder's portfolio has a public URL at `/b/<address>` and a live badge at `/badge/<address>`.
 
 No manual entry. No board to babysit. Nothing to paste.
 
 ## Onchain
 
-- **Contract:** `Backlog.sol` — a per-address project registry (`upsertProject`, `batchUpsert`, `removeProject`, plus views). No admin, no upgradeability; every address writes only its own portfolio.
+- **Contract:** `Backlog.sol` — a per-address project registry with **attested writes** (every score is signed by the scorer; unsigned/forged writes revert) and **shipping bonds** (`bond`, `challenge`, `resolve`, `withdrawBond`). No admin, no upgradeability, no owner; every address writes only its own portfolio. Bond payouts follow checks-effects-interactions.
 - **Network:** Monad mainnet (chainid 143).
-- **Address:** `0x6F432296262feFa84DcFF4b520071616b33794fb` · [MonadScan](https://monadscan.com/address/0x6F432296262feFa84DcFF4b520071616b33794fb)
+- **Address:** `0x37284f74Ce61378522CFC39fDE4FF9d40A195bb8` · [MonadScan](https://monadscan.com/address/0x37284f74Ce61378522CFC39fDE4FF9d40A195bb8)
+- **Why a chain, honestly:** the record is un-backdatable, public, self-sovereign, and composable; the bond market (escrow + challenge + slashing) can't exist off-chain. The one trust point — settlement rests on an oracle attesting whether the *committed* URL responds — is an objectively falsifiable fact anyone can re-check.
 
 ## Run it
 
 **Contract**
 ```bash
 cd contracts
-forge test          # 11 tests
+forge test          # 27 tests
 ./deploy.sh         # deploy + verify on Monad mainnet
 ```
 

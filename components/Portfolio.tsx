@@ -88,9 +88,11 @@ export function Portfolio({
             <ProjectRow
               key={p.slug}
               p={p}
+              builder={address}
               canPrune={owner}
               onPrune={onPrune}
               pruning={pruningSlug === p.slug}
+              onChange={refetch}
             />
           ))}
         </div>
@@ -104,9 +106,11 @@ export function Portfolio({
               <ProjectRow
                 key={p.slug}
                 p={p}
+                builder={address}
                 canPrune={owner}
                 onPrune={onPrune}
                 pruning={pruningSlug === p.slug}
+                onChange={refetch}
               />
             ))}
           </div>
