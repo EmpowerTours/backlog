@@ -206,7 +206,7 @@ export function BondControls({
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://your-live-url"
+          placeholder="https://your-live-deployment"
           className="w-52 rounded border border-edge bg-ink-2 px-2 py-1 font-mono text-text outline-none focus:border-accent"
         />
         <button
@@ -223,9 +223,9 @@ export function BondControls({
           ✕
         </button>
       </div>
-      <span className="text-right text-faint">
-        The live URL you&apos;re bonding. Anyone can challenge it — if it&apos;s
-        dead 3+ days after a challenge, you lose the 0.1 MON.
+      <span className="max-w-xs text-right text-faint">
+        Your live deployment URL — not the GitHub page. Anyone can challenge it;
+        dead 3+ days after a challenge and you lose the 0.1 MON.
       </span>
     </div>
   );
