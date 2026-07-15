@@ -65,7 +65,23 @@ export function GithubSync({ onWritten }: { onWritten: () => void }) {
     });
   }
 
-  if (state === "loading") return null;
+  if (state === "loading") {
+    return (
+      <div className="panel p-6">
+        <h2 className="font-display text-lg font-bold text-text">
+          Reading your GitHub…
+        </h2>
+        <p className="mt-1 text-sm text-dim">
+          Fetching your repos and scoring each one&apos;s completion. This can
+          take a bit — it reads every repo&apos;s file tree for an accurate
+          read.
+        </p>
+        <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-edge">
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-accent" />
+        </div>
+      </div>
+    );
+  }
 
   if (state === "disconnected") {
     return (

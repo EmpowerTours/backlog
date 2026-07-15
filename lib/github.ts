@@ -147,7 +147,7 @@ async function enrichOne(token: string, repo: GhRepo): Promise<GhRepo> {
   try {
     const res = await fetch(
       `${GH_API}/repos/${repo.fullName}/git/trees/${repo.defaultBranch}?recursive=1`,
-      { headers: ghHeaders(token) },
+      { headers: ghHeaders(token), signal: AbortSignal.timeout(8000) },
     );
     if (!res.ok) {
       // 409 = empty repo (no commits)
