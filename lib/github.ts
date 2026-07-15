@@ -75,6 +75,8 @@ export async function fetchViewer(token: string): Promise<GhViewer> {
 
 export interface GhRepo {
   name: string;
+  fullName: string;
+  defaultBranch: string;
   description: string | null;
   pushedAt: string | null;
   createdAt: string | null;
@@ -84,6 +86,12 @@ export interface GhRepo {
   archived: boolean;
   openIssues: number;
   url: string;
+  // filled by enrichRepos — real content signals
+  files?: number;
+  codeFiles?: number;
+  hasTests?: boolean;
+  hasReadme?: boolean;
+  hasManifest?: boolean;
 }
 
 export async function fetchRepos(token: string): Promise<GhRepo[]> {
@@ -98,6 +106,8 @@ export async function fetchRepos(token: string): Promise<GhRepo[]> {
     .filter((r) => !r.fork) // your own work, not forks
     .map((r) => ({
       name: String(r.name),
+      fullName: String(r.full_name ?? r.name),
+      defaultBranch: String(r.default_branch ?? "HEAD"),
       description: (r.description as string) ?? null,
       pushedAt: (r.pushed_at as string) ?? null,
       createdAt: (r.created_at as string) ?? null,
@@ -108,6 +118,65 @@ export async function fetchRepos(token: string): Promise<GhRepo[]> {
       openIssues: Number(r.open_issues_count ?? 0),
       url: String(r.html_url ?? ""),
     }));
+}
+
+const NON_CODE =
+  /(?:^|\/)(?:readme|license|licence|\.gitignore|\.gitattributes|changelog|contributing|code_of_conduct)|(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb)$|(?:^|\/)(?:node_modules|dist|build|out|\.next|vendor|coverage)\//i;
+const TEST_RE = /(?:^|\/)(?:tests?|__tests__|spec|specs)\//i;
+const TEST_FILE = /\.(?:test|spec)\.[a-z]+$|_test\.[a-z]+$|\.t\.sol$/i;
+const MANIFEST =
+  /(?:^|\/)(?:package\.json|Cargo\.toml|go\.mod|pyproject\.toml|requirements\.txt|foundry\.toml|Gemfile|pom\.xml)$/i;
+const README_RE = /(?:^|\/)readme(\.md|\.txt)?$/i;
+
+/** Read each repo's file tree to get real content signals. Bounded concurrency. */
+export async function enrichRepos(
+  token: string,
+  repos: GhRepo[],
+): Promise<GhRepo[]> {
+  const out: GhRepo[] = [];
+  const BATCH = 8;
+  for (let i = 0; i < repos.length; i += BATCH) {
+    const batch = repos.slice(i, i + BATCH);
+    const enriched = await Promise.all(batch.map((r) => enrichOne(token, r)));
+    out.push(...enriched);
+  }
+  return out;
+}
+
+async function enrichOne(token: string, repo: GhRepo): Promise<GhRepo> {
+  try {
+    const res = await fetch(
+      `${GH_API}/repos/${repo.fullName}/git/trees/${repo.defaultBranch}?recursive=1`,
+      { headers: ghHeaders(token) },
+    );
+    if (!res.ok) {
+      // 409 = empty repo (no commits)
+      return {
+        ...repo,
+        files: 0,
+        codeFiles: 0,
+        hasTests: false,
+        hasReadme: false,
+        hasManifest: false,
+      };
+    }
+    const data = (await res.json()) as {
+      tree?: Array<{ path: string; type: string }>;
+    };
+    const blobs = (data.tree ?? []).filter((t) => t.type === "blob");
+    const paths = blobs.map((b) => b.path);
+    const codeFiles = paths.filter((p) => !NON_CODE.test(p)).length;
+    return {
+      ...repo,
+      files: blobs.length,
+      codeFiles,
+      hasTests: paths.some((p) => TEST_RE.test(p) || TEST_FILE.test(p)),
+      hasReadme: paths.some((p) => README_RE.test(p)),
+      hasManifest: paths.some((p) => MANIFEST.test(p)),
+    };
+  } catch {
+    return repo; // leave signals undefined; scorer treats as unknown
+  }
 }
 
 function daysAgo(iso: string | null): number | null {
@@ -131,19 +200,21 @@ export async function scoreRepos(
   token: string,
   repos: GhRepo[],
 ): Promise<Scored[]> {
+  // read each repo's real content (file counts, tests, manifest) with the user's token
+  const enriched = await enrichRepos(token, repos);
   const serverToken = process.env.GITHUB_MODELS_TOKEN;
   const candidates = [
     ...new Set([token, serverToken].filter(Boolean)),
   ] as string[];
   for (const t of candidates) {
     try {
-      return await scoreWithModels(t, repos);
+      return await scoreWithModels(t, enriched);
     } catch (e) {
       console.warn("Models scoring attempt failed:", (e as Error).message);
     }
   }
   console.warn("All Models attempts failed — using heuristic.");
-  return repos.map(heuristicScore);
+  return enriched.map(heuristicScore);
 }
 
 async function scoreWithModels(
@@ -153,16 +224,19 @@ async function scoreWithModels(
   const lines = repos
     .map(
       (r) =>
-        `- ${r.name} [${r.language ?? "?"}] pushed=${daysAgo(r.pushedAt) ?? "?"}d ago age=${daysAgo(r.createdAt) ?? "?"}d size=${r.size}KB issues=${r.openIssues}${r.archived ? " ARCHIVED" : ""} desc:"${(r.description ?? "").slice(0, 90)}"`,
+        `- ${r.name} [${r.language ?? "?"}] pushed=${daysAgo(r.pushedAt) ?? "?"}d ago age=${daysAgo(r.createdAt) ?? "?"}d files=${r.files ?? "?"} code=${r.codeFiles ?? "?"} tests=${r.hasTests ? "y" : "n"} manifest=${r.hasManifest ? "y" : "n"} issues=${r.openIssues}${r.archived ? " ARCHIVED" : ""} desc:"${(r.description ?? "").slice(0, 80)}"`,
     )
     .join("\n");
 
   const system =
-    "You assess software project completion for a builder's portfolio from GitHub repo metadata. " +
+    "You assess software project completion for a builder's portfolio from GitHub repo signals. " +
     "Return a STRICT JSON array, one object per repo, no prose, no code fences. " +
     'Each: {"slug":string,"name":string(<=80),"percent":0-100 int,"status":"active"|"polishing"|"done"|"abandoned","note":string(<=150)}. ' +
-    "Heuristics: 'done' if mature and stable; 'polishing' if ~80-99%; 'active' if pushed recently; " +
-    "'abandoned' if untouched 45+ days and not clearly finished, or archived. Be specific in notes.";
+    "WEIGHT ACTUAL CONTENT HEAVILY: `code` = real source files (excludes README/license/lockfiles). " +
+    "code=0 -> empty stub, percent 0-5, 'abandoned' regardless of age. code 1-2 -> barely started, <=20. " +
+    "A repo is only 'done'/'polishing' with substantial code AND signs of completeness (tests, manifest, mature history). " +
+    "'active' if pushed recently; 'abandoned' if untouched 45+ days and not clearly finished, or archived. " +
+    "Do NOT rate a tiny repo as done just because it's old and stable. Be specific in notes (mention what's actually there).";
 
   const res = await fetch(GH_MODELS, {
     method: "POST",
@@ -199,14 +273,20 @@ async function scoreWithModels(
 
 function heuristicScore(r: GhRepo): Scored {
   const pushed = daysAgo(r.pushedAt);
+  const code = r.codeFiles;
   let status: Scored["status"] = "active";
-  let percent = Math.max(
-    10,
-    Math.min(90, Math.round(Math.log2(r.size + 2) * 12)),
-  );
-  if (r.archived || (pushed != null && pushed > 45)) {
+  let percent =
+    code !== undefined
+      ? Math.max(
+          5,
+          Math.min(
+            85,
+            8 + code * 3 + (r.hasTests ? 10 : 0) + (r.hasManifest ? 5 : 0),
+          ),
+        )
+      : Math.max(10, Math.min(85, Math.round(Math.log2(r.size + 2) * 12)));
+  if (r.archived || (pushed != null && pushed > 60)) {
     status = "abandoned";
-    percent = Math.min(percent, 60);
   } else if (percent >= 80) status = "polishing";
   return normalize(r, {
     name: r.name,
@@ -214,19 +294,38 @@ function heuristicScore(r: GhRepo): Scored {
     status,
     note:
       r.description ??
-      `${r.language ?? "repo"}, last push ${pushed ?? "?"}d ago`,
+      `${code ?? "?"} code files${r.hasTests ? " + tests" : ""}, last push ${pushed ?? "?"}d ago`,
   });
 }
 
 function normalize(r: GhRepo, s: Partial<Scored>): Scored {
-  const status = (
+  let status = (
     s.status && STATUS_SET.has(s.status) ? s.status : "active"
   ) as Scored["status"];
+  let percent = Math.max(0, Math.min(100, Math.round(Number(s.percent) || 0)));
+  let note = String(s.note || "").slice(0, 150);
+
+  // Hard content guards — a repo with little/no real code can't score as finished,
+  // no matter what the model says. `codeFiles` is undefined only if enrichment failed.
+  const code = r.codeFiles;
+  if (code !== undefined) {
+    if (code === 0) {
+      percent = Math.min(percent, 3);
+      status = "abandoned";
+      if (!note) note = "empty — no code files";
+    } else if (code < 3) {
+      percent = Math.min(percent, 20);
+      if (status === "done" || status === "polishing") status = "active";
+    } else if (code < 8 && (status === "done" || status === "polishing")) {
+      percent = Math.min(percent, 60); // only a handful of files — not "done"
+    }
+  }
+
   return {
     slug: r.name.slice(0, 60),
     name: String(s.name || r.name).slice(0, 80),
-    percent: Math.max(0, Math.min(100, Math.round(Number(s.percent) || 0))),
+    percent,
     status,
-    note: String(s.note || "").slice(0, 150),
+    note,
   };
 }
