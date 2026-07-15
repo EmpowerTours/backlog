@@ -246,15 +246,34 @@ export async function scoreRepos(
   const candidates = [
     ...new Set([token, serverToken].filter(Boolean)),
   ] as string[];
+
+  // Score in parallel chunks: one giant prompt for 50+ repos is slow (~30s) and can
+  // truncate the JSON. Chunks of ~18 run concurrently, so wall time ≈ one chunk, and
+  // a truncated/failed chunk degrades to the heuristic without sinking the whole run.
+  const CHUNK = 18;
+  const chunks: GhRepo[][] = [];
+  for (let i = 0; i < enriched.length; i += CHUNK) {
+    chunks.push(enriched.slice(i, i + CHUNK));
+  }
+  const scored = await Promise.all(
+    chunks.map((c) => scoreChunk(c, candidates)),
+  );
+  return scored.flat();
+}
+
+/** Score one chunk: try each token against Models, fall back to the heuristic. Never throws. */
+async function scoreChunk(
+  repos: GhRepo[],
+  candidates: string[],
+): Promise<Scored[]> {
   for (const t of candidates) {
     try {
-      return await scoreWithModels(t, enriched);
+      return await scoreWithModels(t, repos);
     } catch (e) {
-      console.warn("Models scoring attempt failed:", (e as Error).message);
+      console.warn("Models chunk failed:", (e as Error).message);
     }
   }
-  console.warn("All Models attempts failed — using heuristic.");
-  return enriched.map(heuristicScore);
+  return repos.map(heuristicScore);
 }
 
 async function scoreWithModels(
@@ -295,6 +314,8 @@ async function scoreWithModels(
       ],
       temperature: 0.2,
     }),
+    // hard bound — a stalled Models call must never hang the request forever
+    signal: AbortSignal.timeout(30000),
   });
   if (!res.ok)
     throw new Error(

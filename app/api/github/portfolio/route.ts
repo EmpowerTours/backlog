@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchViewer, fetchRepos, scoreRepos } from "@/lib/github";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 export async function GET(req: NextRequest) {
   const token = req.cookies.get("gh_token")?.value;
   if (!token)
