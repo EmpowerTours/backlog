@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAccount } from "wagmi";
 import { backlog, barColor, STATUS_META } from "@/lib/backlog";
 import { useTx } from "@/lib/useTx";
@@ -25,23 +25,48 @@ export function GithubSync({ onWritten }: { onWritten: () => void }) {
   const [projects, setProjects] = useState<Proposed[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [attesting, setAttesting] = useState(false);
+  const [progress, setProgress] = useState(6);
+  const doneRef = useRef(false);
   const tx = useTx();
 
   useEffect(() => {
     fetch("/api/github/portfolio")
       .then(async (r) => {
-        if (r.status === 401) return setState("disconnected");
+        if (r.status === 401) {
+          doneRef.current = true;
+          return setState("disconnected");
+        }
         const d = await r.json();
         if (!r.ok) {
+          doneRef.current = true;
           setErr(d.error || "GitHub error");
           return setState("error");
         }
         setLogin(d.login);
         setProjects(d.projects || []);
-        setState("ready");
+        doneRef.current = true;
+        setProgress(100); // snap the bar to full, then reveal
+        setTimeout(() => setState("ready"), 450);
       })
-      .catch(() => setState("error"));
+      .catch(() => {
+        doneRef.current = true;
+        setState("error");
+      });
   }, []);
+
+  // Ease a progress bar toward ~90% while scoring runs (the request gives no incremental
+  // signal); the fetch handler above snaps it to 100% the moment data lands.
+  useEffect(() => {
+    if (state !== "loading") return;
+    const id = setInterval(() => {
+      setProgress((p) => {
+        if (doneRef.current) return 100;
+        const next = p + Math.max(0.4, (90 - p) * 0.045);
+        return next > 90 ? 90 : next;
+      });
+    }, 250);
+    return () => clearInterval(id);
+  }, [state]);
 
   useEffect(() => {
     if (tx.isConfirmed) {
@@ -88,18 +113,27 @@ export function GithubSync({ onWritten }: { onWritten: () => void }) {
   }
 
   if (state === "loading") {
+    const pct = Math.round(progress);
     return (
       <div className="panel p-6">
         <h2 className="font-display text-lg font-bold text-text">
           Reading your GitHub…
         </h2>
         <p className="mt-1 text-sm text-dim">
-          Fetching your repos and scoring each one&apos;s completion. This can
-          take a bit — it reads every repo&apos;s file tree for an accurate
-          read.
+          {pct < 100
+            ? "Scoring each repo against its own roadmap — reading file trees, tests, and deployments. Hang tight."
+            : "Done — loading your portfolio."}
         </p>
-        <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-edge">
-          <div className="h-full w-1/3 animate-pulse rounded-full bg-accent" />
+        <div className="mt-4 flex items-center gap-3">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-edge">
+            <div
+              className="h-full rounded-full bg-accent transition-all duration-300 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <span className="w-10 shrink-0 text-right font-mono text-xs text-dim">
+            {pct}%
+          </span>
         </div>
       </div>
     );
