@@ -92,6 +92,9 @@ export interface GhRepo {
   hasReadme?: boolean;
   hasManifest?: boolean;
   isLive?: boolean; // homepage URL responds (deployed = shipped signal)
+  checksDone?: number; // completed markdown checklist items (- [x]) across README/ROADMAP/TODO
+  checksTotal?: number; // total checklist items — the author's own definition of done
+  roadmap?: string; // short excerpt of the repo's stated roadmap / what's-left
 }
 
 export async function fetchRepos(token: string): Promise<GhRepo[]> {
@@ -143,6 +146,57 @@ const TEST_FILE = /\.(?:test|spec)\.[a-z]+$|_test\.[a-z]+$|\.t\.sol$/i;
 const MANIFEST =
   /(?:^|\/)(?:package\.json|Cargo\.toml|go\.mod|pyproject\.toml|requirements\.txt|foundry\.toml|Gemfile|pom\.xml)$/i;
 const README_RE = /(?:^|\/)readme(\.md|\.txt)?$/i;
+// Docs that state a project's own definition of done — parsed for checklists + roadmap text.
+const DOC_FILE =
+  /(?:^|\/)(?:readme|roadmap|todo|todos|tasks|status|milestones?|backlog)(?:\.md|\.markdown|\.mdx|\.txt)?$/i;
+
+/** Fetch a text file's content via the contents API (base64), bounded + capped. Empty on any failure. */
+async function fetchText(
+  token: string,
+  fullName: string,
+  path: string,
+  branch: string,
+): Promise<string> {
+  try {
+    const enc = path.split("/").map(encodeURIComponent).join("/");
+    const res = await fetch(
+      `${GH_API}/repos/${fullName}/contents/${enc}?ref=${branch}`,
+      { headers: ghHeaders(token), signal: AbortSignal.timeout(6000) },
+    );
+    if (!res.ok) return "";
+    const j = (await res.json()) as { encoding?: string; content?: string };
+    if (j.encoding !== "base64" || typeof j.content !== "string") return "";
+    return Buffer.from(j.content, "base64").toString("utf8").slice(0, 20000);
+  } catch {
+    return "";
+  }
+}
+
+/** Count markdown checklist items: `- [x]` done vs `- [ ]` open. The author's own progress bar. */
+function parseChecks(text: string): { done: number; total: number } {
+  const done = (text.match(/^[ \t]*[-*+][ \t]+\[[xX]\]/gm) || []).length;
+  const open = (text.match(/^[ \t]*[-*+][ \t]+\[ \]/gm) || []).length;
+  return { done, total: done + open };
+}
+
+/** Pull the text under a roadmap/TODO/what's-left heading — the project's stated remaining scope. */
+function extractRoadmap(text: string): string {
+  const out: string[] = [];
+  let capture = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const h = /^#{1,4}\s*(.+)/.exec(raw);
+    if (h) {
+      capture =
+        /road\s?map|to-?dos?|what'?s\s+(left|next)|next\s+steps|future\s+work|milestones?|planned|checklist|unfinished|remaining|not\s+done|coming\s+soon/i.test(
+          h[1],
+        );
+      continue;
+    }
+    if (capture && raw.trim()) out.push(raw.trim());
+    if (out.length >= 24) break;
+  }
+  return out.join(" ").replace(/\s+/g, " ").slice(0, 600);
+}
 
 /** Read each repo's file tree to get real content signals. Bounded concurrency. */
 export async function enrichRepos(
@@ -195,6 +249,29 @@ async function enrichOne(token: string, repo: GhRepo): Promise<GhRepo> {
   const blobs = (tree.tree ?? []).filter((t) => t.type === "blob");
   const paths = blobs.map((b) => b.path);
   const codeFiles = paths.filter((p) => !NON_CODE.test(p)).length;
+
+  // Read the project's own "definition of done": checklists + roadmap text from up to two
+  // docs. Dedicated ROADMAP/TODO files are richer than a README, so rank them first.
+  const docPaths = paths
+    .filter((p) => DOC_FILE.test(p))
+    .sort((a, b) => (README_RE.test(a) ? 1 : 0) - (README_RE.test(b) ? 1 : 0))
+    .slice(0, 2);
+  let checksDone = 0;
+  let checksTotal = 0;
+  let roadmap = "";
+  if (docPaths.length) {
+    const texts = await Promise.all(
+      docPaths.map((p) =>
+        fetchText(token, repo.fullName, p, repo.defaultBranch),
+      ),
+    );
+    const joined = texts.join("\n\n");
+    const c = parseChecks(joined);
+    checksDone = c.done;
+    checksTotal = c.total;
+    roadmap = extractRoadmap(joined);
+  }
+
   return {
     ...repo,
     files: blobs.length,
@@ -203,6 +280,9 @@ async function enrichOne(token: string, repo: GhRepo): Promise<GhRepo> {
     hasReadme: paths.some((p) => README_RE.test(p)),
     hasManifest: paths.some((p) => MANIFEST.test(p)),
     isLive,
+    checksDone,
+    checksTotal,
+    roadmap,
   };
 }
 
@@ -210,7 +290,18 @@ async function enrichOne(token: string, repo: GhRepo): Promise<GhRepo> {
 function deriveStatus(r: GhRepo, percent: number): Scored["status"] {
   if (r.archived) return "abandoned";
   if (r.codeFiles !== undefined && r.codeFiles < 2) return "abandoned"; // effectively empty
-  if (r.isLive) return "done"; // deployed and responding = shipped
+  if (r.isLive) {
+    // Live, but if the author's own checklist is <80% done it's a shipped MVP still in progress,
+    // not "done" — reflect that honestly rather than rubber-stamping every deployed repo.
+    if (
+      r.checksTotal &&
+      r.checksTotal >= 3 &&
+      r.checksDone! / r.checksTotal < 0.8
+    ) {
+      return percent >= 60 ? "polishing" : "active";
+    }
+    return "done"; // deployed, responding, no unfinished roadmap = shipped
+  }
   const pushed = daysAgo(r.pushedAt);
   const stale = pushed != null && pushed > 45;
   if (stale) return percent >= 90 ? "done" : "abandoned"; // finished-then-left vs given-up
@@ -283,7 +374,7 @@ async function scoreWithModels(
   const lines = repos
     .map(
       (r) =>
-        `- ${r.name} [${r.language ?? "?"}] pushed=${daysAgo(r.pushedAt) ?? "?"}d ago files=${r.files ?? "?"} code=${r.codeFiles ?? "?"} tests=${r.hasTests ? "y" : "n"} manifest=${r.hasManifest ? "y" : "n"} live=${r.isLive ? "y" : "n"}${r.archived ? " ARCHIVED" : ""} desc:"${(r.description ?? "").slice(0, 80)}"`,
+        `- ${r.name} [${r.language ?? "?"}] pushed=${daysAgo(r.pushedAt) ?? "?"}d ago files=${r.files ?? "?"} code=${r.codeFiles ?? "?"} tests=${r.hasTests ? "y" : "n"} manifest=${r.hasManifest ? "y" : "n"} live=${r.isLive ? "y" : "n"} checks=${r.checksTotal ? `${r.checksDone}/${r.checksTotal}` : "none"}${r.archived ? " ARCHIVED" : ""} desc:"${(r.description ?? "").slice(0, 80)}"${r.roadmap ? ` roadmap:"${r.roadmap.slice(0, 200)}"` : ""}`,
     )
     .join("\n");
 
@@ -295,7 +386,8 @@ async function scoreWithModels(
     "CALIBRATE percent by real content — `code` = source files (excludes README/license/lockfiles): " +
     "code=0 -> 0-5. code 1-2 (bare scaffold/template/one-file) -> 8-20. code 3-8 (early prototype) -> 25-45. " +
     "code 9-25 with a manifest -> 45-70. substantial code + tests + manifest -> 70-90. only reserve 90-100 for clearly complete, polished, well-tested projects (or live=y). " +
-    "Be STRICT: 'basic implementation, lacks tests' is ~40-55, NOT 80. A template or bones repo is ~15. Notes must name what's actually there.";
+    "Be STRICT: 'basic implementation, lacks tests' is ~40-55, NOT 80. A template or bones repo is ~15. Notes must name what's actually there. " +
+    "SCORE AGAINST THE PROJECT'S OWN DEFINITION OF DONE when it states one. `checks=done/total` is the author's own checklist progress — weight it HEAVILY (it usually matters more than raw file counts). The `roadmap:` excerpt is what they still plan to build: open/unchecked items lower the percent and MUST be summarized in the note (e.g. 'auth + tests still open'). A live deployment (live=y) with many open checklist/roadmap items is an incomplete MVP (~60-75), not done — do not treat 'live' as 'finished'.";
 
   const res = await fetch(GH_MODELS, {
     method: "POST",
@@ -372,7 +464,16 @@ function normalize(r: GhRepo, s: Partial<Scored>): Scored {
       percent = Math.min(percent, 60);
     }
   }
-  if (r.isLive) percent = Math.max(percent, 85); // it's deployed and serving
+  // The author's own checklist is the most honest completeness signal — blend it in strongly.
+  const hasRoadmap = !!(r.checksTotal && r.checksTotal >= 3);
+  if (hasRoadmap) {
+    const roadmapPct = Math.round((r.checksDone! / r.checksTotal!) * 100);
+    percent = Math.round(percent * 0.4 + roadmapPct * 0.6);
+  }
+
+  // Deployed & serving lifts the floor — but a live MVP with an unfinished roadmap isn't "done",
+  // so the floor is softer (65) when the project's own checklist shows work remaining.
+  if (r.isLive) percent = Math.max(percent, hasRoadmap ? 65 : 85);
 
   // Status is DERIVED from percent + recency + liveness, so it never contradicts the bar.
   const status = deriveStatus(r, percent);
