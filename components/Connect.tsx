@@ -21,10 +21,25 @@ export function Connect() {
       return true;
     });
 
+    // If a browser wallet extension is present, connect to it directly instead of
+    // opening the picker — so desktop users hit MetaMask, not the WalletConnect QR.
+    const hasBrowserWallet =
+      typeof window !== "undefined" &&
+      !!(window as unknown as { ethereum?: unknown }).ethereum;
+    const injectedConnector =
+      connectors.find((c) => /metamask/i.test(c.name)) ??
+      connectors.find((c) => c.type === "injected" || c.id === "injected");
+
     return (
       <div className="relative">
         <button
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => {
+            if (hasBrowserWallet && injectedConnector) {
+              connect({ connector: injectedConnector });
+            } else {
+              setOpen((o) => !o);
+            }
+          }}
           disabled={isPending}
           className="rounded-lg border border-edge-bright bg-panel px-4 py-2 text-sm font-semibold text-text transition hover:border-accent hover:text-accent disabled:opacity-50"
         >
