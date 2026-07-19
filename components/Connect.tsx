@@ -35,7 +35,12 @@ export function Connect() {
         <button
           onClick={() => {
             if (hasBrowserWallet && injectedConnector) {
-              connect({ connector: injectedConnector });
+              // if the injected wallet errors (e.g. MetaMask stub present but not
+              // actually installed), fall back to the picker instead of hanging
+              connect(
+                { connector: injectedConnector },
+                { onError: () => setOpen(true) },
+              );
             } else {
               setOpen((o) => !o);
             }
